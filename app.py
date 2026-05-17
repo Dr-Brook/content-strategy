@@ -23,16 +23,16 @@ from src.profile import PROFILE
 
 APP_NAME = "content-strategy"
 
-# ─── Auth (must be before page config) ────────────────────────────────────────
-pb_login_form()
-
-# ─── Page Config ────────────────────────────────────────────────────────────────
+# ─── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
     page_title="Content Strategy — Personal Brand",
     page_icon="✍️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ─── Auth (optional — login in sidebar to save/sync) ────────────────────────────
+pb_login_form(required=False)
 
 # ─── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""
