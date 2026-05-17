@@ -15,8 +15,9 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-from pb_auth import pb_login_form, get_pb_client, get_pb_user_id, pb_logout_button, pb_query
-from src.content_types import CONTENT_TYPES, TOPICS, AUDIENCES, LENGTHS, TONES
+from pb_auth import get_pb_client, get_pb_user_id, pb_query
+from src.content_types import CONTENT_TYPES
+from src.profile import TOPICS, AUDIENCES, LENGTHS, TONES
 from src.prompts import build_prompt
 from src.ai_service import check_ollama_available, generate_content, regenerate_content
 from src.profile import PROFILE
@@ -31,8 +32,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── Auth (optional — login in sidebar to save/sync) ────────────────────────────
-pb_login_form(required=False)
+# ─── Auth removed — no login required ──────────────────────────────────────────
 
 # ─── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -122,7 +122,6 @@ if "current_content" not in st.session_state:
 # ─── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ✍️ Content Strategy")
-    pb_logout_button()
     st.markdown("---")
 
     ollama_ok = check_ollama_available()
