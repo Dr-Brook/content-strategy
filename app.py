@@ -6,6 +6,7 @@ Built for Brook Eshete, MD, MPH — Johns Hopkins Bloomberg School of Public Hea
 
 import streamlit as st
 import sys
+import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -14,10 +15,16 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
+from pb_auth import pb_login_form, get_pb_client, get_pb_user_id, pb_logout_button, pb_query
 from src.content_types import CONTENT_TYPES, TOPICS, AUDIENCES, LENGTHS, TONES
 from src.prompts import build_prompt
 from src.ai_service import check_ollama_available, generate_content, regenerate_content
 from src.profile import PROFILE
+
+APP_NAME = "content-strategy"
+
+# ─── Auth (must be before page config) ────────────────────────────────────────
+pb_login_form()
 
 # ─── Page Config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -51,16 +58,71 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ─── Pocketbase helpers ────────────────────────────────────────────────────────
+def load_saved_content():
+    """Load saved content from Pocketbase."""
+    client = get_pb_client()
+    user_id = get_pb_user_id()
+    if not client or not user_id:
+        return []
+    try:
+        items = pb_query("saved_calculations", filter=f"user='{user_id}' && app_name='{APP_NAME}'", sort="-created")
+        return [
+            {
+                "id": item.get("id", ""),
+                "type": item.get("calc_type", ""),
+                "content": json.loads(item.get("results", "{}")).get("content", "") if item.get("results") else "",
+                "inputs": json.loads(item.get("inputs", "{}")) if item.get("inputs") else {},
+                "created": item.get("created", ""),
+            }
+            for item in items
+        ]
+    except Exception:
+        return []
+
+
+def save_content(content_type, content, fields, tone, audience, length):
+    """Save generated content to Pocketbase."""
+    client = get_pb_client()
+    user_id = get_pb_user_id()
+    if not client or not user_id:
+        return None
+    try:
+        record = client.collection("saved_calculations").create({
+            "user": user_id,
+            "app_name": APP_NAME,
+            "calc_type": content_type,
+            "inputs": json.dumps({"fields": fields, "tone": tone, "audience": audience, "length": length}),
+            "results": json.dumps({"content": content}),
+        })
+        return record.id
+    except Exception as e:
+        st.error(f"Failed to save: {e}")
+        return None
+
+
+def delete_content(record_id):
+    """Delete saved content from Pocketbase."""
+    client = get_pb_client()
+    if not client:
+        return
+    try:
+        client.collection("saved_calculations").delete(record_id)
+    except Exception:
+        pass
+
+
 # ─── Session State ──────────────────────────────────────────────────────────────
 if "current_content" not in st.session_state:
     st.session_state.current_content = ""
     st.session_state.current_prompt = ""
-    st.session_state.history = []
+    st.session_state.current_record_id = None
     st.session_state.selected_type = "linkedin_post"
 
 # ─── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ✍️ Content Strategy")
+    pb_logout_button()
     st.markdown("---")
 
     ollama_ok = check_ollama_available()
@@ -84,14 +146,22 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("#### 📜 History")
-    if st.session_state.history:
-        for i, item in enumerate(reversed(st.session_state.history)):
+    history = load_saved_content()
+    if history:
+        for item in history:
             type_label = CONTENT_TYPES.get(item["type"], {}).get("label", item["type"])
-            if st.button(f"{type_label}", key=f"hist_{i}"):
-                st.session_state.current_content = item["content"]
-                st.rerun()
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                if st.button(f"{type_label}", key=f"hist_{item['id']}"):
+                    st.session_state.current_content = item["content"]
+                    st.session_state.current_record_id = item["id"]
+                    st.rerun()
+            with col2:
+                if st.button("🗑️", key=f"del_{item['id']}"):
+                    delete_content(item["id"])
+                    st.rerun()
     else:
-        st.caption("No content generated yet")
+        st.caption("No content saved yet")
 
     st.markdown("---")
     st.caption("Built by **Brook Eshete, MD, MPH**")
@@ -188,14 +258,9 @@ if generate_btn:
             try:
                 content = generate_content(prompt)
                 st.session_state.current_content = content
-                st.session_state.history.append({
-                    "type": email_type,
-                    "content": content,
-                    "fields": filled_fields,
-                    "tone": tone,
-                    "audience": audience,
-                    "length": length,
-                })
+                # Save to Pocketbase
+                record_id = save_content(email_type, content, filled_fields, tone, audience, length)
+                st.session_state.current_record_id = record_id
             except Exception as e:
                 st.error(f"Error generating content: {e}")
         st.rerun()
@@ -205,8 +270,15 @@ if regenerate_btn and st.session_state.current_content:
         try:
             content = regenerate_content(st.session_state.current_prompt, tweak)
             st.session_state.current_content = content
-            if st.session_state.history:
-                st.session_state.history[-1]["content"] = content
+            # Update record in Pocketbase
+            if st.session_state.current_record_id:
+                client = get_pb_client()
+                if client:
+                    import json
+                    client.collection("saved_calculations").update(
+                        st.session_state.current_record_id,
+                        {"results": json.dumps({"content": content})}
+                    )
         except Exception as e:
             st.error(f"Error regenerating: {e}")
     st.rerun()
@@ -217,4 +289,13 @@ if st.session_state.current_content:
     st.markdown(f'<div class="content-output">{st.session_state.current_content}</div>', unsafe_allow_html=True)
 
     st.code(st.session_state.current_content, language=None)
+
+    # Delete option
+    if st.session_state.current_record_id:
+        if st.button("🗑️ Delete This Content"):
+            delete_content(st.session_state.current_record_id)
+            st.session_state.current_record_id = None
+            st.session_state.current_content = ""
+            st.rerun()
+
     st.caption("Copy the text above to paste into your content platform.")
